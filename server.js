@@ -1,7 +1,5 @@
-/** server.js - Room Management Fix */
-const io = require("socket.io")(process.env.PORT || 3000, {
-    cors: { origin: "*" }
-});
+/** server.js - Admin Control Logic */
+const io = require("socket.io")(process.env.PORT || 3000, { cors: { origin: "*" } });
 
 const rooms = {};
 
@@ -10,7 +8,8 @@ io.on("connection", (socket) => {
         const roomId = Math.random().toString(36).substring(7).toUpperCase();
         rooms[roomId] = { 
             id: roomId, 
-            players: {}, // Use object to store unique socket IDs
+            players: {}, 
+            adminId: socket.id, // Store who created the room
             max: data.max || 5 
         };
         join(socket, roomId, data.nickname);
@@ -25,13 +24,17 @@ io.on("connection", (socket) => {
         }
     });
 
+    socket.on("admin-start", (data) => {
+        const room = rooms[data.roomId];
+        if (room && room.adminId === socket.id) {
+            // Tell everyone in the room to start the game
+            io.to(data.roomId).emit("start-multiplayer"); 
+        }
+    });
+
     socket.on("sync", (data) => {
         socket.to(data.roomId).emit("player-moved", {
-            id: socket.id,
-            nickname: data.nickname,
-            x: data.x,
-            y: data.y,
-            duck: data.duck
+            id: socket.id, nickname: data.nickname, x: data.x, y: data.y, duck: data.duck
         });
     });
 
@@ -39,6 +42,7 @@ io.on("connection", (socket) => {
         for (const r in rooms) {
             if (rooms[r].players[socket.id]) {
                 delete rooms[r].players[socket.id];
+                io.to(r).emit("lobby-update", rooms[r].players);
                 socket.to(r).emit("player-left", socket.id);
             }
         }
@@ -47,12 +51,14 @@ io.on("connection", (socket) => {
 
 function join(socket, roomId, nickname) {
     socket.join(roomId);
-    // Store player info in the room object
     rooms[roomId].players[socket.id] = { nickname };
     
-    // Send the Room ID back to the creator/joiner
-    socket.emit("joined", { roomId, players: rooms[roomId].players });
+    // Tell the specific player if they are the admin
+    socket.emit("joined", { 
+        roomId, 
+        isAdmin: rooms[roomId].adminId === socket.id 
+    });
     
-    // Notify others in the room
-    socket.to(roomId).emit("new-player", { id: socket.id, nickname });
+    // Update the lobby list for everyone
+    io.to(roomId).emit("lobby-update", rooms[roomId].players);
 }
