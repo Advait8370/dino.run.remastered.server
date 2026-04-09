@@ -1,4 +1,4 @@
-/** server.js - Admin Control Logic */
+/** server.js - Final Multi-Player & Admin Control Fix */
 const io = require("socket.io")(process.env.PORT || 3000, { cors: { origin: "*" } });
 
 const rooms = {};
@@ -9,25 +9,28 @@ io.on("connection", (socket) => {
         rooms[roomId] = { 
             id: roomId, 
             players: {}, 
-            adminId: socket.id, // Store who created the room
-            max: data.max || 5 
+            adminId: socket.id, 
+            max: parseInt(data.max) || 5,
+            gameStarted: false // Prevent late joins
         };
         join(socket, roomId, data.nickname);
     });
 
     socket.on("join-room", (data) => {
         const roomId = data.roomId.toUpperCase();
-        if (rooms[roomId] && Object.keys(rooms[roomId].players).length < rooms[roomId].max) {
+        const room = rooms[roomId];
+        // Allow joining only if room exists, isn't full, and hasn't started
+        if (room && !room.gameStarted && Object.keys(room.players).length < room.max) {
             join(socket, roomId, data.nickname);
         } else {
-            socket.emit("error-msg", "Room Full or Not Found");
+            socket.emit("error-msg", room?.gameStarted ? "Game already started" : "Room Full or Not Found");
         }
     });
 
     socket.on("admin-start", (data) => {
         const room = rooms[data.roomId];
         if (room && room.adminId === socket.id) {
-            // Tell everyone in the room to start the game
+            room.gameStarted = true; // Lock the room
             io.to(data.roomId).emit("start-multiplayer"); 
         }
     });
@@ -42,7 +45,11 @@ io.on("connection", (socket) => {
         for (const r in rooms) {
             if (rooms[r].players[socket.id]) {
                 delete rooms[r].players[socket.id];
-                io.to(r).emit("lobby-update", rooms[r].players);
+                // Broadcast updated count and list
+                io.to(r).emit("lobby-update", {
+                    players: rooms[r].players,
+                    count: Object.keys(rooms[r].players).length
+                });
                 socket.to(r).emit("player-left", socket.id);
             }
         }
@@ -53,12 +60,15 @@ function join(socket, roomId, nickname) {
     socket.join(roomId);
     rooms[roomId].players[socket.id] = { nickname };
     
-    // Tell the specific player if they are the admin
     socket.emit("joined", { 
         roomId, 
-        isAdmin: rooms[roomId].adminId === socket.id 
+        isAdmin: rooms[roomId].adminId === socket.id,
+        max: rooms[roomId].max
     });
     
-    // Update the lobby list for everyone
-    io.to(roomId).emit("lobby-update", rooms[roomId].players);
+    // Send updated player list and count to everyone in the lobby
+    io.to(roomId).emit("lobby-update", {
+        players: rooms[roomId].players,
+        count: Object.keys(rooms[roomId].players).length
+    });
 }
